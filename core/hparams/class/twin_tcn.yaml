@@ -1,0 +1,129 @@
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+np_rng: !new:numpy.random.RandomState [!ref <seed>]
+
+project: EEECh24
+experiment: twin_tcn
+save_root: ./save/class
+time_stamp: !PLACEHOLDER
+save_folder: !ref <save_root>/<experiment>/<seed>
+
+## Data and feature hparams
+
+wav_sr: 16000
+eeg_sr: 64
+wav_ch: 1
+eeg_ch: 64
+
+n_mismatch: 4
+n_win: !ref <n_mismatch> + 1
+win_sec: 5
+
+feature: envelope
+feature_sr: 64
+
+## Dataset
+
+data_root: /engram/naplab/shared/eeg_challenge_data_new/derivatives/split_data_16khz
+
+train_windows: !new:data.dataset.RandomWindowDataset
+    data_root: !ref <data_root>
+    split: train
+    speech_features: !ref <feature>
+    eeg_sr: !ref <eeg_sr>
+    feature_sr: !ref <feature_sr>
+    n_win: !ref <n_win>
+    win_sec: !ref <win_sec>
+    rand_win: true
+
+
+valid_windows: !new:data.dataset.RandomWindowDataset
+    data_root: !ref <data_root>
+    split: valid
+    speech_features: !ref <feature>
+    eeg_sr: !ref <eeg_sr>
+    feature_sr: !ref <feature_sr>
+    n_win: !ref <n_win>
+    win_sec: !ref <win_sec>
+    rand_win: false # fixed windows for eval
+
+## Loader
+
+batch_size: 4
+n_worker: 16
+
+train_loader_opts:
+    batch_size: !ref <batch_size>
+    num_workers: !ref <n_worker>
+    shuffle: true
+    drop_last: true
+
+valid_loader_opts:
+    batch_size: !ref <batch_size>
+    num_workers: !ref <n_worker>
+    shuffle: false
+
+## Model
+
+n_tconv: 3
+kernel_size: 3
+spatial_filters: 8
+dilation_filters: 16
+activation: !new:torch.nn.ReLU
+
+twin_model: !new:modules.baseline.TwinDilationModel
+    eeg_input_dimension: !ref <eeg_ch>
+    sti_input_dimension: !ref <wav_ch>
+    layers: !ref <n_tconv>
+    kernel_size: !ref <kernel_size>
+    spatial_filters: !ref <spatial_filters>
+    dilation_filters: !ref <dilation_filters>
+    activation: !ref <activation>
+    num_mismatched_segments: !ref <n_mismatch>
+
+modules:
+    twin_model: !ref <twin_model>
+
+## Training
+
+loss_fn: !name:torch.nn.functional.cross_entropy
+
+n_epoch: 200
+lr: 1.0e-3
+patience: 10
+
+mix_prec: false
+mix_dtype: !name:torch.bfloat16 # always
+
+optimizer: !name:torch.optim.Adam
+    lr: !ref <lr>
+
+lr_scheduler: !name:torch.optim.lr_scheduler.ReduceLROnPlateau
+    mode: 'min'
+    factor: 0.5
+    patience: !ref <patience>
+    verbose: true
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <n_epoch>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        twin_model: !ref <twin_model>
+        counter: !ref <epoch_counter>
+        optimizer: !ref <optimizer>
+        lr_scheduler: !ref <lr_scheduler>
+
+## Logging
+
+me: xj-audio
+use_wandb: false
+resume: false
+wandb_logger: !name:speechbrain.utils.train_logger.WandBLogger
+    initializer: !name:wandb.init
+    entity: !ref <me>
+    project: !ref <project>
+    name: !ref <experiment>-<time_stamp>
+    dir: !ref <save_folder>
+    resume: !ref <resume>
