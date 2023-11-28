@@ -1,0 +1,145 @@
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+np_rng: !new:numpy.random.RandomState [!ref <seed>]
+
+project: EEECh24
+experiment: twin_tcn
+save_root: ./save/class
+time_stamp: !PLACEHOLDER
+save_folder: !ref <save_root>/<experiment>/<seed>
+
+## Data and feature hparams
+
+wav_sr: 16000
+eeg_sr: 64
+wav_ch: 1
+eeg_ch: 64
+
+n_mismatch: 4
+n_win: !ref <n_mismatch> + 1
+win_sec: 5
+hop_sec: 1
+
+feature: envelope # the tag in file path before .npy
+feature_ch: 1
+feature_sr: 64
+
+batch_size: 64
+
+## Loaders
+
+data_root: /engram/naplab/shared/eeg_challenge_data_new/derivatives/split_data_16khz
+
+train_windows: !new:data.tf_dataset.BaselineDataWrapper
+    data_root: !ref <data_root>
+    split: train
+    win_sec: !ref <win_sec>
+    hop_sec: !ref <hop_sec>
+    features:
+        - eeg
+        - !ref <feature>
+    feature_dims: 
+        - !ref <eeg_ch>
+        - !ref <feature_ch>
+    feature_rates: 
+        - !ref <eeg_sr>
+        - !ref <feature_sr>
+    number_mismatch: !ref <n_mismatch>
+    batch_size: !ref <batch_size>
+
+
+valid_windows: !new:data.tf_dataset.BaselineDataWrapper
+    data_root: !ref <data_root>
+    split: valid
+    win_sec: !ref <win_sec>
+    hop_sec: !ref <hop_sec>
+    features:
+        - eeg
+        - !ref <feature>
+    feature_dims: 
+        - !ref <eeg_ch>
+        - !ref <feature_ch>
+    feature_rates: 
+        - !ref <eeg_sr>
+        - !ref <feature_sr>
+    number_mismatch: !ref <n_mismatch>
+    batch_size: !ref <batch_size>
+
+## Model
+
+n_tconv: 3
+kernel_size: 3
+spatial_filters: 8
+dilation_filters: 16
+activation: !new:torch.nn.ReLU
+
+eeg_model: !new:modules.baseline.TCN
+    input_dim: !ref <eeg_ch>
+    layers: !ref <n_tconv>
+    kernel_size: !ref <kernel_size>
+    spatial_filters: !ref <spatial_filters>
+    dilation_filters: !ref <dilation_filters>
+    activation: !ref <activation>
+
+speech_model: !new:modules.baseline.TCN
+    input_dim: !ref <feature_ch>
+    layers: !ref <n_tconv>
+    kernel_size: !ref <kernel_size>
+    spatial_filters: !ref <spatial_filters>
+    dilation_filters: !ref <dilation_filters>
+    activation: !ref <activation>
+
+classifier: !new:modules.baseline.ProjSimilarityClassifier
+    input_dim: !ref <dilation_filters>
+
+# Put every nn.Module here
+modules:
+    eeg_model: !ref <eeg_model>
+    speech_model: !ref <speech_model>
+    classifier: !ref <classifier>
+
+## Training
+
+loss_fn: !name:torch.nn.functional.cross_entropy
+
+n_epoch: 100
+lr: 1.0e-3
+patience: 5
+
+mix_prec: false
+mix_dtype: !name:torch.bfloat16 # always
+
+optimizer: !name:torch.optim.Adam
+    lr: !ref <lr>
+
+lr_scheduler: !name:torch.optim.lr_scheduler.ReduceLROnPlateau
+    mode: 'min'
+    factor: 0.5
+    patience: !ref <patience>
+    verbose: true
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <n_epoch>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        eeg_model: !ref <eeg_model>
+        speech_model: !ref <speech_model>
+        classifier: !ref <classifier>
+        epoch_counter: !ref <epoch_counter>
+        optimizer: !ref <optimizer>
+        lr_scheduler: !ref <lr_scheduler>
+
+## Logging
+
+me: xj-audio
+use_wandb: false
+resume: false
+wandb_logger: !name:speechbrain.utils.train_logger.WandBLogger
+    initializer: !name:wandb.init
+    entity: !ref <me>
+    project: !ref <project>
+    name: !ref <experiment>-<time_stamp>
+    dir: !ref <save_folder>
+    resume: !ref <resume>
