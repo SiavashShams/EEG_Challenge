@@ -26,6 +26,8 @@ feature_sr: 64
 
 batch_size: 64
 
+n_worker: 16
+
 ## Loaders
 
 data_root: /engram/naplab/shared/eeg_challenge_data_new/derivatives/split_data_16khz
@@ -46,6 +48,7 @@ train_windows: !new:data.tf_dataset.BaselineDataWrapper
         - !ref <feature_sr>
     number_mismatch: !ref <n_mismatch>
     batch_size: !ref <batch_size>
+    n_worker: !ref <n_worker>
 
 
 valid_windows: !new:data.tf_dataset.BaselineDataWrapper
@@ -64,6 +67,7 @@ valid_windows: !new:data.tf_dataset.BaselineDataWrapper
         - !ref <feature_sr>
     number_mismatch: !ref <n_mismatch>
     batch_size: !ref <batch_size>
+    n_worker: !ref <n_worker>
 
 ## Model
 
@@ -104,7 +108,7 @@ loss_fn: !name:torch.nn.functional.cross_entropy
 
 n_epoch: 100
 lr: 1.0e-3
-patience: 5
+patience: 3
 
 mix_prec: false
 mix_dtype: !name:torch.bfloat16 # always
@@ -128,8 +132,6 @@ checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
         speech_model: !ref <speech_model>
         classifier: !ref <classifier>
         epoch_counter: !ref <epoch_counter>
-        optimizer: !ref <optimizer>
-        lr_scheduler: !ref <lr_scheduler>
 
 ## Logging
 

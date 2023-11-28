@@ -105,7 +105,7 @@ class DataGenerator:
         """
         data = []
         for feature in self.files[recording_index]:
-            f = np.load(feature, mmap_mode='r').astype(np.float32)
+            f = np.load(feature).astype(np.float32)
             if f.ndim == 1:
                 f = f[:,None]
 
@@ -149,6 +149,7 @@ def create_tf_dataset(
     feature_rates=(64, 16000),
     number_mismatch=4, # None for regression, 2 or 4 for match-mismatch
     batch_size=64,
+    n_worker=tf.data.AUTOTUNE
 ):
     """Creates a tf.data.Dataset.
 
@@ -199,20 +200,20 @@ def create_tf_dataset(
             tf.signal.frame(arg, int(win_sec*feature_rates[i]), int(hop_sec*feature_rates[i]), axis=0)
             for i, arg in enumerate(args)
         ],
-        num_parallel_calls=tf.data.AUTOTUNE
+        num_parallel_calls=n_worker
     ) # (n_win, win_len, 64 or 1)
 
     if number_mismatch is not None:
         # map second argument to shifted version
         dataset = dataset.map( lambda *args : shuffle_signals_N_times(args, number_mismatch),
-            num_parallel_calls=tf.data.AUTOTUNE
+            num_parallel_calls=n_worker
         ) # ( eeg, wav0, wav1(shuffled), wav2(shuffled), ... )
 
     dataset = dataset.interleave(
         lambda *args: tf.data.Dataset.from_tensor_slices(args),
-        cycle_length=8,
+        cycle_length=n_worker,
         block_length=1,
-        num_parallel_calls=tf.data.AUTOTUNE,
+        num_parallel_calls=n_worker
     ) # size of dataset = number of windows
 
     if batch_size is not None:
@@ -237,8 +238,9 @@ class BaselineDataWrapper(Dataset):
         features=['eeg', 'envelope'],
         feature_dims=(64, 1),
         feature_rates=(64, 64),
-        number_mismatch=4, # None for regression, 2 or 4 for match-mismatch
-        batch_size=64,  
+        number_mismatch=4,
+        batch_size=64,
+        n_worker=16
     ):
         super().__init__()
         
@@ -251,7 +253,8 @@ class BaselineDataWrapper(Dataset):
             'feature_dims': feature_dims,
             'feature_rates': feature_rates,
             'number_mismatch': number_mismatch,
-            'batch_size': batch_size
+            'batch_size': batch_size,
+            'n_worker': n_worker
         }
 
         self.reload()
