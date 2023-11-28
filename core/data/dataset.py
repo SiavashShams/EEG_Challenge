@@ -67,6 +67,7 @@ class RandomWindowDataset(Dataset):
         duration = min([len(feature)/self.rates[fname] for fname, feature in subject_npy.items()])
 
         # Randomly choose windows
+        # IMPORTANT: time is the FIRST dim
         windows = {fname: [] for fname in self.features}
         for i in range(self.n_win):
             if self.rand_win:
@@ -88,6 +89,90 @@ class RandomWindowDataset(Dataset):
             windows[fname] = np.array(windows[fname]).transpose(0, 2, 1) # (n_win, dim, win_len)
 
         return windows
+
+# IMPORTANT: time is the FIRST dim
+def extract_windows(signal, window_size, stride):
+    assert len(signal) > 1000
+    signal_length = len(signal)
+    num_windows = (signal_length - window_size) // stride + 1
+
+    # Calculate the starting indices for each window
+    start_indices = np.arange(0, num_windows * stride, stride)
+
+    # Use array slicing to extract windows
+    windows = signal[start_indices[:, np.newaxis] + np.arange(window_size)]
+
+    return windows
+
+
+class AllWindowDataset(Dataset):
+    
+    def __init__(
+        self, 
+        data_root,
+        split,
+        speech_features=['envelope'],
+        eeg_sr=64, 
+        feature_sr=[64], 
+        n_win=5,
+        win_sec=5,
+        hop_sec=1
+    ):
+        if not isinstance(speech_features, list):
+            speech_features = [speech_features]
+        if not isinstance(feature_sr, list):
+            feature_sr = [feature_sr]
+        self.features = ['eeg'] + speech_features
+        self.rates = {fname: sr for fname, sr in zip(speech_features, feature_sr)}
+        self.rates['eeg'] = eeg_sr
+
+        files = [
+            x for x in glob.glob(os.path.join(data_root, f"{split}_-_*")) if os.path.basename(x).split("_-_")[-1].split(".")[0] 
+            in self.features
+        ]
+        self.files = self.group_recordings(files)
+        self.n_win, self.win_sec, self.hop_sec = n_win, win_sec, hop_sec
+        self.windows = self.concatenate_all_windows(self.files)
+    
+    def concatenate_all_windows(self, files):
+        self.windows = {fname: [] for fname in self.features}
+        for file_dict in files:
+            for fname, path in file_dict.items():
+                # IMPORTANT: time is the FIRST dim
+                feature = np.load(path, mmap_mode='r').astype(np.float32)
+                if feature.ndim == 1:
+                    feature = feature[:, np.newaxis]
+                windows = extract_windows(
+                    feature, 
+                    window_size=self.win_sec*self.rates[fname],
+                    stride=self.hop_sec*self.rates[fname]
+                )
+                print(fname, windows.shape)
+                self.windows[fname].append(windows)
+        
+        for fname in self.features:
+            self.windows[fname] = np.array(self.windows[fname])
+
+
+    def group_recordings(self, files):
+        new_files = []
+        grouped = itertools.groupby(sorted(files), lambda x: "_-_".join(os.path.basename(x).split("_-_")[:3]))
+        for recording_name, feature_paths in grouped:
+            subject_files = {}
+            for path in feature_paths:
+                for fname in self.features:
+                    if fname in os.path.basename(path):
+                        subject_files[fname] = path
+                        break
+            new_files.append(subject_files)
+
+        return new_files
+    
+    def __len__(self):
+        return len(self.windows)
+
+    def __getitem__(self, idx):
+        return {fname: self.windows[fname][idx] for fname in self.features}
 
 
 # Depreciated

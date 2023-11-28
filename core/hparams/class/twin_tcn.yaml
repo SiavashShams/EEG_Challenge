@@ -18,50 +18,52 @@ eeg_ch: 64
 n_mismatch: 4
 n_win: !ref <n_mismatch> + 1
 win_sec: 5
+hop_sec: 1
 
-feature: envelope
+feature: envelope # the tag in file path before .npy
+feature_ch: 1
 feature_sr: 64
 
-## Dataset
+batch_size: 64
+
+## Loaders
 
 data_root: /engram/naplab/shared/eeg_challenge_data_new/derivatives/split_data_16khz
 
-train_windows: !new:data.dataset.RandomWindowDataset
+train_windows: !new:data.tf_dataset.BaselineDataWrapper
     data_root: !ref <data_root>
     split: train
-    speech_features: !ref <feature>
-    eeg_sr: !ref <eeg_sr>
-    feature_sr: !ref <feature_sr>
-    n_win: !ref <n_win>
     win_sec: !ref <win_sec>
-    rand_win: true
+    hop_sec: !ref <hop_sec>
+    features:
+        - eeg
+        - !ref <feature>
+    feature_dims: 
+        - !ref <eeg_ch>
+        - !ref <feature_ch>
+    feature_rates: 
+        - !ref <eeg_sr>
+        - !ref <feature_sr>
+    number_mismatch: !ref <n_mismatch>
+    batch_size: !ref <batch_size>
 
 
-valid_windows: !new:data.dataset.RandomWindowDataset
+valid_windows: !new:data.tf_dataset.BaselineDataWrapper
     data_root: !ref <data_root>
     split: valid
-    speech_features: !ref <feature>
-    eeg_sr: !ref <eeg_sr>
-    feature_sr: !ref <feature_sr>
-    n_win: !ref <n_win>
     win_sec: !ref <win_sec>
-    rand_win: false # fixed windows for eval
-
-## Loader
-
-batch_size: 4
-n_worker: 16
-
-train_loader_opts:
+    hop_sec: !ref <hop_sec>
+    features:
+        - eeg
+        - !ref <feature>
+    feature_dims: 
+        - !ref <eeg_ch>
+        - !ref <feature_ch>
+    feature_rates: 
+        - !ref <eeg_sr>
+        - !ref <feature_sr>
+    number_mismatch: !ref <n_mismatch>
     batch_size: !ref <batch_size>
-    num_workers: !ref <n_worker>
-    shuffle: true
-    drop_last: true
-
-valid_loader_opts:
-    batch_size: !ref <batch_size>
-    num_workers: !ref <n_worker>
-    shuffle: false
 
 ## Model
 
@@ -71,26 +73,38 @@ spatial_filters: 8
 dilation_filters: 16
 activation: !new:torch.nn.ReLU
 
-twin_model: !new:modules.baseline.TwinDilationModel
-    eeg_input_dimension: !ref <eeg_ch>
-    sti_input_dimension: !ref <wav_ch>
+eeg_model: !new:modules.baseline.TCN
+    input_dim: !ref <eeg_ch>
     layers: !ref <n_tconv>
     kernel_size: !ref <kernel_size>
     spatial_filters: !ref <spatial_filters>
     dilation_filters: !ref <dilation_filters>
     activation: !ref <activation>
-    num_mismatched_segments: !ref <n_mismatch>
 
+speech_model: !new:modules.baseline.TCN
+    input_dim: !ref <feature_ch>
+    layers: !ref <n_tconv>
+    kernel_size: !ref <kernel_size>
+    spatial_filters: !ref <spatial_filters>
+    dilation_filters: !ref <dilation_filters>
+    activation: !ref <activation>
+
+classifier: !new:modules.baseline.ProjSimilarityClassifier
+    input_dim: !ref <dilation_filters>
+
+# Put every nn.Module here
 modules:
-    twin_model: !ref <twin_model>
+    eeg_model: !ref <eeg_model>
+    speech_model: !ref <speech_model>
+    classifier: !ref <classifier>
 
 ## Training
 
 loss_fn: !name:torch.nn.functional.cross_entropy
 
-n_epoch: 200
+n_epoch: 100
 lr: 1.0e-3
-patience: 10
+patience: 5
 
 mix_prec: false
 mix_dtype: !name:torch.bfloat16 # always
@@ -110,8 +124,10 @@ epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
 checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
     checkpoints_dir: !ref <save_folder>
     recoverables:
-        twin_model: !ref <twin_model>
-        counter: !ref <epoch_counter>
+        eeg_model: !ref <eeg_model>
+        speech_model: !ref <speech_model>
+        classifier: !ref <classifier>
+        epoch_counter: !ref <epoch_counter>
         optimizer: !ref <optimizer>
         lr_scheduler: !ref <lr_scheduler>
 

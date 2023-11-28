@@ -8,7 +8,12 @@ import glob
 import random
 import itertools
 import numpy as np
+
+import torch
 import tensorflow as tf
+from torch.utils.data import Dataset
+
+from tqdm import tqdm
 
 
 def shuffle_fn(args, number_mismatch):
@@ -40,77 +45,6 @@ def shuffle_signals_N_times(args, N):
     return (eeg_list, wav_list)
 
 
-def create_tf_dataset(
-    data_generator,
-    win_sec,
-    hop_sec=1,
-    batch_size=None,
-    data_types=(tf.float32, tf.float32),
-    feature_dims=(64, 1),
-    feature_rates=(64, 16000),
-    number_mismatch=4, # None for regression, 2 or 4 for match-mismatch
-):
-    """Creates a tf.data.Dataset.
-
-    This will be used to create a dataset generator that will
-    pass windowed data to a model in both tasks.
-
-    Parameters
-    ---------
-    data_generator: DataGenerator
-        A data generator.
-    batch_equalizer_fn: Callable
-        Function that will be applied on the data after batching (using
-        the `map` method from tf.data.Dataset). In the match/mismatch task,
-        this function creates the imposter segments and labels.
-    batch_size: Optional[int]
-        If not None, specifies the batch size. In the match/mismatch task,
-        this amount will be doubled by the default_batch_equalizer_fn
-    data_types: Union[Sequence[tf.dtype], tf.dtype]
-        The data types that the individual features of data_generator should
-        be cast to. If you only specify a single datatype, it will be chosen
-        for all EEG/speech features.
-
-    Returns
-    -------
-    tf.data.Dataset
-        A Dataset object that generates data to train/evaluate models
-        efficiently
-    """
-    # create tf dataset from generator
-    dataset = tf.data.Dataset.from_generator(
-        data_generator,
-        output_signature=tuple(
-            tf.TensorSpec(shape=(None, x), dtype=data_types[index])
-            for index, x in enumerate(feature_dims)
-        ),
-    ) # ( (Neeg, 64), (Nwav, 1) )
-
-    # window dataset
-    dataset = dataset.map(
-        lambda *args: [
-            tf.signal.frame(arg, int(win_sec*feature_rates[i]), int(hop_sec*feature_rates[i]), axis=0)
-            for i, arg in enumerate(args)
-        ],
-        num_parallel_calls=tf.data.AUTOTUNE
-    ) # (n_win, win_len, 64 or 1)
-
-    if number_mismatch is not None:
-        # map second argument to shifted version
-        dataset = dataset.map( lambda *args : shuffle_signals_N_times(args, number_mismatch),
-            num_parallel_calls=tf.data.AUTOTUNE
-        ) # ( eeg, wav0, wav1(shuffled), wav2(shuffled), ... )
-
-    dataset = dataset.interleave(
-        lambda *args: tf.data.Dataset.from_tensor_slices(args),
-        cycle_length=8,
-        block_length=1,
-        num_parallel_calls=tf.data.AUTOTUNE,
-    ) # size of dataset = number of windows
-
-    return dataset
-
-
 class DataGenerator:
     """Generate data for the Match/Mismatch task."""
 
@@ -130,8 +64,8 @@ class DataGenerator:
         """
         files = [x for x in glob.glob(os.path.join(data_root, f"{split}_-_*")) if os.path.basename(x).split("_-_")[-1].split(".")[0] in features]
         self.files = self.group_recordings(files)
+        np.random.shuffle(self.files)
         self.tf = tf
-
 
     def group_recordings(self, files):
         """Group recordings and corresponding stimuli.
@@ -202,4 +136,153 @@ class DataGenerator:
         np.random.shuffle(self.files)
 
     def prepare_data(self, data):
-        return dat
+        return data
+    
+    
+def create_tf_dataset(
+    data_root,
+    split,
+    win_sec=5,
+    hop_sec=1,
+    features=['eeg', 'wav'],
+    feature_dims=(64, 1),
+    feature_rates=(64, 16000),
+    number_mismatch=4, # None for regression, 2 or 4 for match-mismatch
+    batch_size=64,
+):
+    """Creates a tf.data.Dataset.
+
+    This will be used to create a dataset generator that will
+    pass windowed data to a model in both tasks.
+
+    Parameters
+    ---------
+    data_generator: DataGenerator
+        A data generator.
+    batch_equalizer_fn: Callable
+        Function that will be applied on the data after batching (using
+        the `map` method from tf.data.Dataset). In the match/mismatch task,
+        this function creates the imposter segments and labels.
+    batch_size: Optional[int]
+        If not None, specifies the batch size. In the match/mismatch task,
+        this amount will be doubled by the default_batch_equalizer_fn
+    data_types: Union[Sequence[tf.dtype], tf.dtype]
+        The data types that the individual features of data_generator should
+        be cast to. If you only specify a single datatype, it will be chosen
+        for all EEG/speech features.
+
+    Returns
+    -------
+    tf.data.Dataset
+        A Dataset object that generates data to train/evaluate models
+        efficiently
+    """
+    # create tf dataset from generator
+    data_generator = DataGenerator(
+        data_root=data_root,
+        split=split,
+        features=features,
+        tf=True
+    )
+    
+    dataset = tf.data.Dataset.from_generator(
+        data_generator,
+        output_signature=tuple(
+            tf.TensorSpec(shape=(None, x), dtype=tf.float32)
+            for index, x in enumerate(feature_dims)
+        ),
+    ) # ( (Neeg, 64), (Nwav, 1) )
+
+    # window dataset
+    dataset = dataset.map(
+        lambda *args: [
+            tf.signal.frame(arg, int(win_sec*feature_rates[i]), int(hop_sec*feature_rates[i]), axis=0)
+            for i, arg in enumerate(args)
+        ],
+        num_parallel_calls=tf.data.AUTOTUNE
+    ) # (n_win, win_len, 64 or 1)
+
+    if number_mismatch is not None:
+        # map second argument to shifted version
+        dataset = dataset.map( lambda *args : shuffle_signals_N_times(args, number_mismatch),
+            num_parallel_calls=tf.data.AUTOTUNE
+        ) # ( eeg, wav0, wav1(shuffled), wav2(shuffled), ... )
+
+    dataset = dataset.interleave(
+        lambda *args: tf.data.Dataset.from_tensor_slices(args),
+        cycle_length=8,
+        block_length=1,
+        num_parallel_calls=tf.data.AUTOTUNE,
+    ) # size of dataset = number of windows
+
+    if batch_size is not None:
+        dataset = dataset.batch(batch_size, drop_remainder=True)
+
+    return dataset
+
+
+class BaselineDataWrapper(Dataset):
+    '''
+    Wrap create_tf_dataset into a pytorch dataset.
+    __getitem__ returns a batch of EEG and a batch of speech features
+    __len__ returns the number of windows
+    '''
+
+    def __init__(
+        self, 
+        data_root,
+        split,
+        win_sec=5,
+        hop_sec=1,
+        features=['eeg', 'envelope'],
+        feature_dims=(64, 1),
+        feature_rates=(64, 64),
+        number_mismatch=4, # None for regression, 2 or 4 for match-mismatch
+        batch_size=64,  
+    ):
+        super().__init__()
+        
+        self.kwargs = {
+            'data_root': data_root,
+            'split': split,
+            'win_sec': win_sec, 
+            'hop_sec': hop_sec,
+            'features': features,
+            'feature_dims': feature_dims,
+            'feature_rates': feature_rates,
+            'number_mismatch': number_mismatch,
+            'batch_size': batch_size
+        }
+
+        self.reload()
+
+        # Test run to count the number of batches
+        self.n_batch_total = 0
+        for batch in tqdm(self.tf_loader, desc='Counting batches in TF dataset'):
+            self.n_batch_total += 1
+            
+        self.reload()
+        
+    def reload(self):
+        # Recreate tf dataset
+        self.tf_loader = iter(
+            create_tf_dataset(
+                **self.kwargs
+            )
+        )
+
+    def __len__(self):
+        return self.n_batch_total
+
+    def __getitem__(self, idx):
+        # idx is depreciated
+        # eeg is always the first returned
+        eeg, speech_feature = self.tf_loader.next()
+
+        # (B, M, C, T)
+        eeg = torch.tensor(eeg.numpy())\
+            .permute(0, 1, 3, 2).contiguous()
+        speech_feature = torch.tensor(speech_feature.numpy())\
+            .permute(0, 1, 3, 2).contiguous()
+        
+        return eeg, speech_feature
