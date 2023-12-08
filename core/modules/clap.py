@@ -6,8 +6,24 @@ https://github.com/microsoft/CLAP/blob/main/msclap/models/clap.py
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
+import torch.nn.functional as F
+
+
+def random_mask_frames(input_tensor, p):
+    batch_size, num_frames = input_tensor.shape[0], input_tensor.shape[-1]
+
+    # Generate a binary mask with the specified probability
+    mask = torch.bernoulli(torch.full((batch_size, num_frames), 1 - p)).to(input_tensor.device)
+
+    # Expand dimensions of the mask to match the input tensor
+    mask = mask.unsqueeze(1)
+
+    # Apply the mask to zero out features
+    masked_tensor = input_tensor * mask
+
+    return masked_tensor
+
 
 
 class Projection(nn.Module):

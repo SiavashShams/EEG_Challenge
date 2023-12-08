@@ -17,8 +17,8 @@ class TCN(nn.Module):
         kernel_size=3,
         spatial_filters=8,
         dilation_filters=16,
-        activation=nn.ReLU()
-        
+        activation=nn.ReLU(),
+        input_proj=nn.Identity(), # there is no projection on envelope in the baseline        
     ):
         super(TCN, self).__init__()
 
@@ -29,7 +29,7 @@ class TCN(nn.Module):
         self.dilation_filters = dilation_filters
         self.activation = activation
 
-        self.conv1x1 = nn.Conv1d(in_channels=input_dim, out_channels=spatial_filters, kernel_size=1)
+        self.input_proj = input_proj
         self.tcn = nn.Sequential()
 
         for layer_index in range(layers):
@@ -54,7 +54,7 @@ class TCN(nn.Module):
             B, M, C, T = x.shape
             x = x.view(B*M, C, T)
 
-        h = self.conv1x1(x)
+        h = self.input_proj(x)
         h = self.tcn(h)
 
         if n_dim == 4:
