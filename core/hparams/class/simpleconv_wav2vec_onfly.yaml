@@ -1,0 +1,239 @@
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+np_rng: !new:numpy.random.RandomState [!ref <seed>]
+
+project: EEGCh24
+experiment: meta_model
+save_root: ./save/class
+time_stamp: !PLACEHOLDER
+save_folder: !ref <save_root>/<experiment>/<seed>
+
+## Data and feature hparams
+
+wav_sr: 16000
+eeg_sr: 64
+wav_ch: 1
+eeg_ch: 64
+
+n_mismatch: 4
+n_win: !ref <n_mismatch> + 1
+win_sec: 5
+hop_sec: 1
+
+feature: wav # the tag in file path before .npy
+feature_ch: 1024
+feature_sr: 16000
+
+batch_size: 256
+
+n_worker: 16
+
+n_train: !ref 666 // <batch_size>
+#n_train: null
+n_train_valid: !ref 666 // <batch_size>
+#n_train_valid: null
+## Loaders
+
+data_root: /engram/naplab/shared/eeg_challenge_data_new/derivatives/split_data_16khz
+
+train_windows: !new:data.dataset.RandomWindowDataset
+        data_root: !ref <data_root>
+        split: train
+        speech_features: !ref <feature>
+        eeg_sr: 64
+        feature_sr: !ref <feature_sr>
+        n_win: 5
+        win_sec: 5
+        rand_win: true
+
+valid_windows: !new:data.dataset.RandomWindowDataset
+        data_root: !ref <data_root>
+        split: valid
+        speech_features: !ref <feature>
+        eeg_sr: 64
+        feature_sr: !ref <feature_sr>
+        n_win: 5
+        win_sec: 5
+        rand_win: false
+    
+    
+train_loader_params:
+    batch_size: !ref <batch_size>
+    num_workers: !ref <n_worker>
+    shuffle: true
+    drop_last: true
+    
+
+valid_loader_params:
+    batch_size: !ref <batch_size>
+    num_workers: !ref <n_worker>
+    drop_last: true
+    shuffle: false
+    
+## Model
+
+n_tconv: 3
+kernel_size: 3
+spatial_filters: 8
+dilation_filters: 16
+activation: !new:torch.nn.ReLU
+
+eeg_model:  !new:modules.simpleconv.SimpleConv
+# Overall
+  in_channels: {"meg": 64}  # 64 input channels for 'meg'
+  out_channels: 16         # 128 output channels
+  hidden: {"meg": 64}      # 128 hidden channels for 'meg'
+  concatenate: false
+  depth: 4
+  linear_out: false
+  complex_out: false
+  # Conv layer
+  kernel_size: 5
+  dilation_growth: 2
+  dilation_period:
+  skip: false
+  post_skip: false
+  growth: 1.
+  scale:  # if not none, layer scale init value
+  rewrite: false  # 1x1 conv layer in residual branch
+  groups: 1
+  glu: 0
+  glu_context: 0
+  glu_glu: true
+  gelu: false
+  # Dual path
+  dual_path: 0
+  # Dropouts and BN and activations
+  conv_dropout: 0.0
+  dropout_input: 0.0
+  batch_norm: false
+  relu_leakiness: 0.0
+  # Subject specific settings
+  subject_dim: 0
+  subject_layers: false
+  embedding_scale: 1.0
+  subject_layers_dim: input  # input or hidden
+  subject_layers_id: false  # init to identity subject layer
+  # stft transform
+  n_fft:
+  fft_complex: true
+  # merger
+  merger: false
+  merger_pos_dim: 256
+  merger_channels: 270
+  merger_dropout: 0.2
+  merger_penalty: 0.
+  merger_per_subject: false
+  dropout: 0.  # traditional dropout for comparison
+  dropout_rescale: true
+  initial_linear: 0  # initial linear for comparison
+  initial_depth: 1
+  initial_nonlin: false
+    
+speech_model: !new:modules.simpleconv.SimpleConv
+# Overall
+  in_channels: {"meg": 1024}  # 64 input channels for 'meg'
+  out_channels: 16         # 128 output channels
+  hidden: {"meg": 64}      # 128 hidden channels for 'meg'
+  concatenate: false
+  depth: 4
+  linear_out: false
+  complex_out: false
+  # Conv layer
+  kernel_size: 5
+  dilation_growth: 2
+  dilation_period:
+  skip: false
+  post_skip: false
+  growth: 1.
+  scale:  # if not none, layer scale init value
+  rewrite: false  # 1x1 conv layer in residual branch
+  groups: 1
+  glu: 0
+  glu_context: 0
+  glu_glu: true
+  gelu: false
+  # Dual path
+  dual_path: 0
+  # Dropouts and BN and activations
+  conv_dropout: 0.0
+  dropout_input: 0.0
+  batch_norm: false
+  relu_leakiness: 0.0
+  # Subject specific settings
+  subject_dim: 0
+  subject_layers: false
+  embedding_scale: 1.0
+  subject_layers_dim: input  # input or hidden
+  subject_layers_id: false  # init to identity subject layer
+  # stft transform
+  n_fft:
+  fft_complex: true
+  # merger
+  merger: false
+  merger_pos_dim: 256
+  merger_channels: 270
+  merger_dropout: 0.2
+  merger_penalty: 0.
+  merger_per_subject: false
+  dropout: 0.  # traditional dropout for comparison
+  dropout_rescale: true
+  initial_linear: 0  # initial linear for comparison
+  initial_depth: 1
+  initial_nonlin: false
+  
+classifier: !new:modules.baseline.ProjSimilarityClassifier
+    input_dim: !ref <dilation_filters>
+
+# Put every nn.Module here
+modules:
+    eeg_model: !ref <eeg_model>
+    speech_model: !ref <speech_model>
+    classifier: !ref <classifier>
+
+## Training
+
+loss_fn: !name:torch.nn.functional.cross_entropy
+
+use_speech_embedding: true  
+extract_features_on_the_fly: true
+
+n_epoch: 1000
+lr: 2.0e-3
+patience: 10
+
+mix_prec: false
+mix_dtype: !name:torch.bfloat16 # always
+
+optimizer: !name:torch.optim.Adam
+    lr: !ref <lr>
+
+lr_scheduler: !name:torch.optim.lr_scheduler.ReduceLROnPlateau
+    mode: 'min'
+    factor: 0.5
+    patience: !ref <patience>
+    verbose: true
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <n_epoch>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        eeg_model: !ref <eeg_model>
+        speech_model: !ref <speech_model>
+        classifier: !ref <classifier>
+        epoch_counter: !ref <epoch_counter>
+
+## Logging
+
+me: naplab_siavash
+use_wandb: false
+resume: false
+wandb_logger: !name:speechbrain.utils.train_logger.WandBLogger
+    initializer: !name:wandb.init
+    entity: !ref <me>
+    project: !ref <project>
+    name: !ref <experiment>-<time_stamp>
+    dir: !ref <save_folder>
+    resume: !ref <resume>
